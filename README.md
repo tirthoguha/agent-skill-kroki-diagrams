@@ -1,9 +1,14 @@
-# claude-skill-kroki-diagrams
+# Kroki diagrams for Claude Code and OpenAI Codex
 
-A [Claude Code](https://claude.com/claude-code) skill that renders Mermaid (and
+A shared skill for [Claude Code](https://claude.com/claude-code) and
+[OpenAI Codex](https://developers.openai.com/codex/) that renders Mermaid (and
 other [Kroki](https://kroki.io)-supported) diagrams to **flattened, white-background
 PNGs** suitable for Confluence / Slack / docs, then reviews each render visually
 for readability before declaring it done.
+
+The shared workflow grounds diagrams in source material, keeps complex views
+focused, and reviews both factual accuracy and visual readability. It prefers
+lossless image flattening and checks render failures before processing output.
 
 The skill drives a **local** Kroki stack: the main `kroki` engine plus its
 `kroki-mermaid` companion, wired together on a shared Docker network.
@@ -11,10 +16,10 @@ The skill drives a **local** Kroki stack: the main `kroki` engine plus its
 ## Architecture
 
 ```
-Claude Code ──curl──▶ kroki  (localhost:8585)
-                        │  delegates Mermaid rendering
-                        ▼  via KROKI_MERMAID_HOST over kroki-net
-                     kroki-mermaid  (internal, :8002)
+Claude Code / Codex ──curl──▶ kroki  (localhost:8585)
+                               │  delegates Mermaid rendering
+                               ▼  via KROKI_MERMAID_HOST over kroki-net
+                            kroki-mermaid  (internal, :8002)
 ```
 
 Only `kroki` publishes a port. It defaults to **8585** (port 8000 is commonly
@@ -32,8 +37,8 @@ internal `kroki-net` bridge network, by DNS hostname `kroki-mermaid`.
   | Tool | Platforms | Install |
   |---|---|---|
   | **ImageMagick** (`magick`/`convert`) | macOS, Linux, Windows | `brew install imagemagick` · `apt install imagemagick` · `choco install imagemagick` |
-  | **`sips`** | macOS only | built in |
   | **Pillow** (`python3` + PIL) | any | `pip install pillow` |
+  | **`sips`** | macOS only | built in; JPEG fallback can soften text |
 
   On Linux/Windows there is no `sips`, so install **ImageMagick** (recommended) or
   Pillow.
@@ -49,17 +54,24 @@ docker compose up -d                          # or: KROKI_PORT=9123 docker compo
 curl -sf http://localhost:8585/ >/dev/null && echo "Kroki OK"
 ```
 
-**Step 2 — make the skill available to Claude Code.** A skill is just a directory
+**Step 2 — install the skill for your agent.** Both agents use the same
+`skills/kroki/SKILL.md`; choose either or both installations below.
+
+### Claude Code
+
+A skill is just a directory
 containing a `SKILL.md`; Claude discovers it under `~/.claude/skills/` (personal)
 or `.claude/skills/` (this project only). The directory name becomes the command,
 so installing it as `kroki` gives you **`/kroki`**. Symlink it so it tracks
 `git pull`s:
 
 ```bash
-# Personal (all your projects):
+# Personal (all your projects), from this repo root:
+mkdir -p "$HOME/.claude/skills"
 ln -s "$PWD/skills/kroki" ~/.claude/skills/kroki
-# …or project-scoped (commit .claude/skills/kroki for teammates):
-ln -s "$PWD/skills/kroki" .claude/skills/kroki
+# …or project-scoped within this repo (relative link works for teammates):
+mkdir -p .claude/skills
+ln -s ../../skills/kroki .claude/skills/kroki
 ```
 
 > **Windows:** use `mklink /D` (cmd, admin) or `New-Item -ItemType SymbolicLink`
@@ -69,10 +81,57 @@ Then in Claude Code ask for any diagram ("draw the architecture", "sequence
 diagram of the auth flow", …) — or type `/kroki` — and the skill takes over. It
 still needs the Kroki stack from **Step 1** running locally.
 
+### OpenAI Codex
+
+From this repo root, install a personal skill:
+
+```bash
+mkdir -p "$HOME/.agents/skills"
+ln -s "$PWD/skills/kroki" "$HOME/.agents/skills/kroki"
+```
+
+Or install only for this repository using a relative symlink that teammates can
+use after checking it in:
+
+```bash
+mkdir -p .agents/skills
+ln -s ../../skills/kroki .agents/skills/kroki
+```
+
+Choose one scope to avoid duplicate entries. These commands expect no existing
+`kroki` entry at the destination; inspect an existing installation before replacing
+it. On Windows, use the symlink commands above via a supported shell, or copy
+`skills/kroki` into the chosen skills directory instead. Copies need to be updated
+after pulling changes.
+
+In Codex CLI or the IDE extension, select the skill with `/skills` or mention it:
+
+```text
+$kroki Create an engineering sequence diagram of login:
+browser -> API -> identity provider -> API -> browser.
+Put the source and PNG in ./docs/diagrams.
+```
+
+Codex can also select the skill automatically when a request matches its
+description. Restart Codex if it does not discover the new installation.
+See the [official skills documentation](https://developers.openai.com/codex/skills).
+
+### Execution environment
+
+Use a local agent session with access to Docker, `curl`, an image flattener, and
+an image-viewing tool for visual review. In a remote/cloud session, `localhost`
+refers to that remote environment, not your laptop; it needs its own reachable
+Kroki stack. Installing the skill alone does not start or provision Docker.
+
+Respect the agent host's filesystem and network permissions. The default output
+folder may be outside a Codex workspace; set `KROKI_DIAGRAMS_DIR` to a permitted
+location or explicitly request a workspace output folder as in the example above.
+The skill reports when visual review is unavailable instead of claiming it passed.
+
 ## Configuring the port
 
 The stack and the skill both read `KROKI_PORT` (default `8585`). Export it once
-in your shell so `docker compose` and Claude Code agree:
+in your shell so `docker compose` and your agent agree:
 
 ```bash
 export KROKI_PORT=9123   # add to ~/.zshrc / ~/.bashrc to persist
@@ -88,7 +147,7 @@ exporting `KROKI_DIAGRAMS_DIR` (the skill reads it via the shell):
 export KROKI_DIAGRAMS_DIR="$HOME/diagrams"   # add to ~/.zshrc / ~/.bashrc to persist
 ```
 
-You can also override per request by telling Claude explicitly ("put these in
+You can also override per request by telling the agent explicitly ("put these in
 `./docs/diagrams`") — an explicit instruction wins over both the env var and the
 default.
 
@@ -118,13 +177,17 @@ in version control.
 claude-skill-kroki-diagrams/
 ├── skills/
 │   └── kroki/
-│       └── SKILL.md        # the skill — symlink this dir into ~/.claude/skills/
+│       ├── SKILL.md        # shared instructions for both agents
+│       └── agents/
+│           └── openai.yaml # Codex display metadata
 ├── docker-compose.yml      # the local Kroki stack the skill drives
 ├── LICENSE
 └── README.md
 ```
 
-It ships as a **bare skill**: Claude Code loads any `<name>/SKILL.md` placed under
+It ships as a **bare skill** with one shared source. Codex discovers it under
+`~/.agents/skills/` or `.agents/skills/` and supports `$kroki` invocation in the
+CLI/IDE. Claude Code loads any `<name>/SKILL.md` placed under
 `~/.claude/skills/` (personal) or `.claude/skills/` (project), and the directory
 name is the command. Installed as `kroki`, that's `/kroki` — no namespace prefix.
 

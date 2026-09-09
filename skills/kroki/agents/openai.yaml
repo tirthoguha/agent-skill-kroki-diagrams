@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kroki Diagrams"
+  short_description: "Render and visually review diagrams with local Kroki"
+  default_prompt: "Use $kroki to create and visually review a diagram."
