@@ -1,11 +1,15 @@
 ---
 name: kroki
-description: Generate architecture / sequence / state / flow diagrams as PNG files using the user's local Kroki Docker container, with white backgrounds suitable for Confluence and dark-mode-tolerant docs. Use this skill whenever the user asks for diagrams to visualize a system, flow, lifecycle, sequence, state machine, or architecture — and follow up with a vision-based review of each rendered diagram to catch readability issues.
+description: Generate architecture / sequence / state / flow diagrams as PNG files using the user's local Kroki Docker container, with white backgrounds suitable for Confluence and dark-mode-tolerant docs. Use when the user wants rendered image files for a system, flow, lifecycle, sequence, state machine, or architecture; not for small inline Mermaid code blocks. Review rendered images visually when image viewing is available.
 ---
 
 # kroki
 
 Render Mermaid (and other Kroki-supported) diagrams as PNG using the user's **local** Kroki Docker container, then **read the PNG back and review it visually** for readability before declaring the job done.
+
+This shared skill works with Claude Code and OpenAI Codex. Use the host's shell
+and image-viewing tools; tool names vary by agent. A local session must be able
+to reach the Kroki stack. In remote sessions, `localhost` is the remote machine.
 
 ## When to use
 
@@ -58,6 +62,19 @@ Example clarifying ask: *"Before I render — is this an architecture overview, 
 
 Skip the ask if the request already includes the subject + at least one of {type, audience, scope}.
 
+## Diagram design
+
+- Start with the reader's question. Use one overview or several focused diagrams
+  when a single canvas would mix unrelated concerns or become hard to read.
+- Ground participants, boundaries, and arrow directions in the supplied code or
+  documentation. Label assumptions; do not invent services or failure paths.
+- Use short, meaningful labels. Explain unfamiliar abbreviations and give colors
+  a consistent meaning; include a legend when their meaning is not obvious.
+- Show the relevant system boundary and distinguish synchronous calls, asynchronous
+  work, and responses. Include error paths only when they matter to the requested scope.
+- Match the output to the request: use an inline Mermaid block for a small inline
+  diagram, and this rendering workflow when the deliverable is an image file.
+
 ## Workflow
 
 For each diagram requested:
@@ -87,6 +104,10 @@ For each diagram requested:
    $BASE/<feature-or-topic-slug>/NN-<descriptive-name>.mmd
    ```
 
+   Respect the host's filesystem permissions. If this directory is not writable,
+   use an explicitly supplied writable output location or request the required
+   permission; do not silently change the destination.
+
    Create the directory if it doesn't exist. The slug is short kebab-case (e.g., `custom-domain`, `billing-flow`, `auth-handshake`). NN is a zero-padded 2-digit ordinal (`01`, `02`, …).
 
    A user can also override the location for a single request by saying so
@@ -97,16 +118,21 @@ For each diagram requested:
 
 3. **Render to PNG** with white background — this is mandatory:
    ```bash
-   curl -sX POST "http://localhost:$PORT/mermaid/png?bgColor=white" \
+   curl --fail --show-error --silent --connect-timeout 5 --max-time 60 -X POST "http://localhost:$PORT/mermaid/png?bgColor=white" \
      -H 'Content-Type: text/plain' \
      --data-binary @<path>.mmd \
      -o <path>.png \
      -w "HTTP %{http_code}, %{size_download} bytes\n"
    ```
 
+   Check the command exit status before flattening or opening the output. On a
+   nonzero exit, stop this render and diagnose the error; an HTTP error body is
+   not a diagram. Correct invalid source before retrying. Do not loop indefinitely
+   on connection or renderer failures.
+
    For other diagram engines, swap `mermaid` in the URL for `plantuml`, `graphviz`, `bpmn`, `excalidraw`, `bytefield`, `nomnoml`, `wavedrom`, etc. See `https://kroki.io/#how-to-render-a-diagram`.
 
-4. **Flatten the alpha channel** — this is mandatory. Kroki always outputs **RGBA** even with `?bgColor=white`. The pixels Mermaid draws are white, but the empty canvas regions are *transparent*. On dark Confluence / Slack themes, that transparency lets the page background bleed through and makes labels unreadable. Always strip the alpha channel:
+4. **Flatten the alpha channel** — this is mandatory. Kroki PNG output may retain an alpha channel even with `?bgColor=white`. Flatten onto white to guarantee an opaque result. On dark Confluence / Slack themes, that transparency lets the page background bleed through and makes labels unreadable. Always strip the alpha channel:
 
    Use whichever flattener is available — detect, don't assume an OS:
 
@@ -115,19 +141,34 @@ For each diagram requested:
      # ImageMagick — works on macOS, Linux, Windows (Git Bash / WSL)
      IM=$(command -v magick || command -v convert)
      "$IM" <path>.png -background white -alpha remove -alpha off <path>.png
-   elif command -v sips >/dev/null; then
-     # macOS built-in — JPEG round-trip forces RGB (JPEG has no alpha)
-     sips -s format jpeg <path>.png --out /tmp/_flatten.jpg >/dev/null
-     sips -s format png /tmp/_flatten.jpg --out <path>.png >/dev/null
-     rm -f /tmp/_flatten.jpg
-   else
-     # Last resort — Python Pillow (pip install pillow); cross-platform
-     python3 - "<path>.png" <<'PY'
-   import sys; from PIL import Image
-   p = sys.argv[1]; im = Image.open(p).convert("RGBA")
-   bg = Image.new("RGB", im.size, (255, 255, 255)); bg.paste(im, mask=im.split()[3])
+   elif python3 -c 'from PIL import Image' >/dev/null 2>&1; then
+     # Pillow — lossless; prefer this to a JPEG round-trip when available.
+     python3 - "<path>.png" <<'PYTHON'
+   import sys
+   from PIL import Image
+   p = sys.argv[1]
+   with Image.open(p) as source:
+       im = source.convert("RGBA")
+   bg = Image.new("RGB", im.size, (255, 255, 255))
+   bg.paste(im, mask=im.getchannel("A"))
    bg.save(p)
-   PY
+   PYTHON
+   elif command -v sips >/dev/null; then
+     # macOS fallback. JPEG removes alpha but can soften text; prefer a lossless tool.
+     FLATTEN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kroki-flatten.XXXXXX") || exit 1
+     FLATTEN_TMP="$FLATTEN_DIR/flatten.jpg"
+     if sips -s format jpeg <path>.png --out "$FLATTEN_TMP" >/dev/null &&
+        sips -s format png "$FLATTEN_TMP" --out <path>.png >/dev/null; then
+       rm -f "$FLATTEN_TMP"
+       rmdir "$FLATTEN_DIR"
+     else
+       rm -f "$FLATTEN_TMP"
+       rmdir "$FLATTEN_DIR"
+       exit 1
+     fi
+   else
+     echo "No image flattener available. Install ImageMagick or Python Pillow." >&2
+     exit 1
    fi
 
    # Verify — output should say "8-bit/color RGB" (not RGBA).
@@ -138,7 +179,7 @@ For each diagram requested:
    If the check still reports `RGBA` (or `rgba`), the flatten didn't take — retry
    with a different tool from the list above.
 
-5. **Visually review the PNG** by Read-ing it (the tool returns the rendered image to the model). For each diagram, check the criteria in the next section and either:
+5. **Visually review the PNG** using the host's available image-viewing tool (for example, Claude Code's `Read` or Codex's `view_image`, when available). A shell command that only reports file metadata does not count as visual review. If image viewing is unavailable, report that visual review could not be completed and do not claim it passed. Otherwise, check the criteria in the next section and either:
    - Declare it acceptable, or
    - Edit the `.mmd` source and re-render (+ re-flatten) until it passes.
 
@@ -146,7 +187,7 @@ For each diagram requested:
 
 ## Review criteria (the vision pass)
 
-After Read-ing each PNG, check:
+After opening each PNG with an image-viewing tool, check:
 
 | Issue | Symptom | Fix |
 |---|---|---|
@@ -156,7 +197,7 @@ After Read-ing each PNG, check:
 | **Floating notes overlap** | `note right of X` produces a dashed connector that crosses real arrows | Drop redundant notes, or place them at the diagram edges (use `note left of` to push them outward). |
 | **Tiny illegible text** | Diagram is wider than 2000 px and labels look pixelated when scaled down | Shorten participant names, abbreviate. Long technical names like `Background pool (customdomain-teardown)` → `Async pool` + a `Note over` with the long form. |
 | **Font fallback** | Diagram uses default Mermaid font even though the source asked for Open Sans / Inter / etc. | The Kroki Mermaid container doesn't have custom fonts installed. Don't try to fight it — remove the `fontFamily` from `%%{init: …}%%` so the default doesn't generate a "missing font" warning. |
-| **Transparent background** | PNG looks fine in your reader but has alpha — labels become unreadable on dark Confluence / Slack | `?bgColor=white` alone is NOT enough — Kroki still outputs RGBA. Must flatten with the OS-appropriate tool in step 4 (ImageMagick / sips / Pillow). Verify with `file <path>.png` → should say `8-bit/color RGB`, not `RGBA`. |
+| **Transparent background** | PNG looks fine in your reader but has alpha — labels become unreadable on dark Confluence / Slack | `?bgColor=white` does not guarantee an RGB output. Must flatten with the OS-appropriate tool in step 4 (ImageMagick / sips / Pillow). Verify with `file <path>.png` → should say `8-bit/color RGB`, not `RGBA`. |
 | **Logical errors** | Arrows don't match the actual code/flow, missing async vs sync distinction, etc. | Re-read the source code / docs the diagram represents, fix factual errors. |
 
 If a fix requires re-rendering, **edit the `.mmd` and re-curl** — don't try to surgically patch the PNG.
@@ -204,15 +245,16 @@ This makes the phase boundary unmissable.
 
 ## Common Kroki gotchas
 
-- **Long Mermaid sources** can fail silently with HTTP 400 — check the `-w "HTTP %{http_code}"` output every render.
+- **Invalid or large Mermaid sources** can return HTTP 400 — use `curl --fail`, check its exit status, and inspect the renderer response before retrying.
 - **POST body** must be UTF-8 — avoid stray BOMs or CRLF (some editors add them).
 - **Render times** for big sequences can be 3–6 seconds — that's normal; not stuck.
 - **`bgColor`** is supported for Mermaid PNG but NOT for SVG (SVG always has transparent background — set the bg in your stylesheet if needed).
-- **PNGs are always RGBA** even with `?bgColor=white`. Kroki paints the canvas white but the output retains an alpha channel, so unused pixels remain transparent. Always flatten to RGB before delivering (see step 4) — otherwise the diagram is unreadable on dark themes.
+- **Check PNG alpha** even with `?bgColor=white`. Renderer output may retain an alpha channel or transparent regions. Always flatten to RGB before delivering (see step 4) — otherwise the diagram is unreadable on dark themes.
 
 ## Final report format
 
-When done, summarize as:
+When done, summarize as below. Only claim visual review if you actually inspected
+every image; otherwise identify which images were not reviewed and why:
 
 ```
 Generated N diagrams under $BASE/<slug>/:
