@@ -11,6 +11,9 @@
 #   docker compose down                        # stop both
 #   curl -sf localhost:${KROKI_PORT:-8585}/    # health check
 
+# Keep the Docker Desktop project name independent of the checkout folder.
+name: agent-skill-kroki-diagrams
+
 services:
   kroki:
     image: yuzutech/kroki

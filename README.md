@@ -29,6 +29,10 @@ Claude Code / Codex ──curl──▶ kroki  (localhost:8585)
                             kroki-mermaid  (internal, :8002)
 ```
 
+Docker Compose uses the project name `agent-skill-kroki-diagrams`, even when
+the checkout folder has a different name. The service/container names remain
+`kroki` and `kroki-mermaid`.
+
 Only `kroki` publishes a port. It defaults to **8585** (port 8000 is commonly
 busy) and is overridable via `KROKI_PORT`. The companion is reachable only on the
 internal `kroki-net` bridge network, by DNS hostname `kroki-mermaid`.
