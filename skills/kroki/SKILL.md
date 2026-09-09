@@ -1,11 +1,11 @@
 ---
 name: kroki
-description: Generate architecture / sequence / state / flow diagrams as PNG files using the user's local Kroki Docker container, with white backgrounds suitable for Confluence and dark-mode-tolerant docs. Use when the user wants rendered image files for a system, flow, lifecycle, sequence, state machine, or architecture; not for small inline Mermaid code blocks. Review rendered images visually when image viewing is available.
+description: Create architecture, sequence, and state diagrams as PNG or SVG using local Kroki. Use for shareable diagram files and visual review; use inline Mermaid for small conversational explanations.
 ---
 
 # kroki
 
-Render Mermaid (and other Kroki-supported) diagrams as PNG using the user's **local** Kroki Docker container, then **read the PNG back and review it visually** for readability before declaring the job done.
+Render Mermaid (and other Kroki-supported) diagrams as PNG or SVG using the user's **local** Kroki Docker container, then **open the rendered output and review it visually** for readability before declaring the job done.
 
 This shared skill works with Claude Code and OpenAI Codex. Use the host's shell
 and image-viewing tools; tool names vary by agent. A local session must be able
@@ -48,19 +48,25 @@ If the container isn't running or the port doesn't respond, **stop** and tell th
 
 Do not attempt to render until they confirm it's up.
 
-## Ask first if context is thin
+## Scope and output choice
 
-Before generating, confirm you have enough to make a *useful* diagram. If any of the following is unclear, ask the user **one consolidated question** (not a barrage):
+Use the conversation to infer the subject, audience, and scope. For an explicitly
+requested sample, choose a small fictional example and label it as such. Ask one
+consolidated question only when missing facts would materially change the diagram.
 
-- **Subject** — what system / flow / lifecycle the diagram should depict (the actual thing, not just the type)
-- **Audience** — engineering, ops, product, customers, executives. Affects level of detail and jargon.
-- **Scope** — full architecture vs. one slice (e.g., "just the cleanup path", "just the happy path")
-- **Diagram type preference** — sequence vs. flowchart vs. state machine. Sometimes obvious from the subject; sometimes not.
-- **How many diagrams** — one overview or several focused ones
+| Need | Output |
+|---|---|
+| Short explanation in a chat that renders Mermaid | Inline Mermaid; no server needed |
+| Copy into docs, chat, or a destination with unknown SVG support | Opaque white PNG plus editable source |
+| Zooming, resizing, or vector-friendly documentation | SVG plus editable source |
+| Both easy sharing and scalable reuse, or explicit comparison | PNG and SVG plus one shared source |
 
-Example clarifying ask: *"Before I render — is this an architecture overview, a step-by-step sequence, or a state machine? And who's reading it: engineering, or a customer-facing doc? That changes how much detail I bake in."*
-
-Skip the ask if the request already includes the subject + at least one of {type, audience, scope}.
+Default to PNG for unspecified image requests. Do not generate every format by
+default. Preserve the `.mmd` source; SVG is scalable output, not a replacement for
+semantic source editing. SVG support varies by destination, especially for HTML
+labels. Prefer native SVG text (`flowchart: {htmlLabels: false}`) for portable
+flowchart exports, and verify the actual SVG in a browser. Interactivity requires
+a separate interactive artifact; an SVG alone is not an interactive application.
 
 ## Diagram design
 
@@ -74,6 +80,24 @@ Skip the ask if the request already includes the subject + at least one of {type
   work, and responses. Include error paths only when they matter to the requested scope.
 - Match the output to the request: use an inline Mermaid block for a small inline
   diagram, and this rendering workflow when the deliverable is an image file.
+
+### Layout for the destination
+
+- Start with a single reading direction. Prefer top-to-bottom for narrow chat or
+  document columns and left-to-right for genuinely horizontal comparisons.
+- Inspect at the intended display width (roughly 700–900 px for a document), not
+  only zoomed in. If labels become tiny, shorten or split the diagram before
+  increasing image resolution. Do not enlarge a small raster and call it sharper.
+- Architecture: group only meaningful boundaries, keep similar components at the
+  same level, and label edges with relationships rather than vague verbs.
+- Sequence: order participants by interaction, use solid calls and dashed replies,
+  and label background phases explicitly. A queued request being accepted is not
+  the same as its background work completing.
+- State: name states as conditions (Queued, Running, Ready); label transitions
+  with events or guards. Distinguish failure, retry, and terminal outcomes only
+  when the example or source establishes them.
+- Use restrained role-based colors and explicit text labels, so the meaning
+  survives grayscale. A boundary title must not intersect an incoming arrow.
 
 ## Workflow
 
@@ -116,70 +140,29 @@ For each diagram requested:
    repo unless told to — the default assumption is the user takes them to
    Confluence and doesn't want them tracked in git.
 
-3. **Render to PNG** with white background — this is mandatory:
-   ```bash
-   curl --fail --show-error --silent --connect-timeout 5 --max-time 60 -X POST "http://localhost:$PORT/mermaid/png?bgColor=white" \
-     -H 'Content-Type: text/plain' \
-     --data-binary @<path>.mmd \
-     -o <path>.png \
-     -w "HTTP %{http_code}, %{size_download} bytes\n"
-   ```
-
-   Check the command exit status before flattening or opening the output. On a
-   nonzero exit, stop this render and diagnose the error; an HTTP error body is
-   not a diagram. Correct invalid source before retrying. Do not loop indefinitely
-   on connection or renderer failures.
-
-   For other diagram engines, swap `mermaid` in the URL for `plantuml`, `graphviz`, `bpmn`, `excalidraw`, `bytefield`, `nomnoml`, `wavedrom`, etc. See `https://kroki.io/#how-to-render-a-diagram`.
-
-4. **Flatten the alpha channel** — this is mandatory. Kroki PNG output may retain an alpha channel even with `?bgColor=white`. Flatten onto white to guarantee an opaque result. On dark Confluence / Slack themes, that transparency lets the page background bleed through and makes labels unreadable. Always strip the alpha channel:
-
-   Use whichever flattener is available — detect, don't assume an OS:
+3. **Render the selected formats** using the bundled helper. Resolve its path
+   relative to this skill directory, not the current project. It needs Python 3.9 or newer
+   and `curl`; PNG additionally needs ImageMagick, Pillow, or macOS `sips`.
 
    ```bash
-   if command -v magick >/dev/null || command -v convert >/dev/null; then
-     # ImageMagick — works on macOS, Linux, Windows (Git Bash / WSL)
-     IM=$(command -v magick || command -v convert)
-     "$IM" <path>.png -background white -alpha remove -alpha off <path>.png
-   elif python3 -c 'from PIL import Image' >/dev/null 2>&1; then
-     # Pillow — lossless; prefer this to a JPEG round-trip when available.
-     python3 - "<path>.png" <<'PYTHON'
-   import sys
-   from PIL import Image
-   p = sys.argv[1]
-   with Image.open(p) as source:
-       im = source.convert("RGBA")
-   bg = Image.new("RGB", im.size, (255, 255, 255))
-   bg.paste(im, mask=im.getchannel("A"))
-   bg.save(p)
-   PYTHON
-   elif command -v sips >/dev/null; then
-     # macOS fallback. JPEG removes alpha but can soften text; prefer a lossless tool.
-     FLATTEN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/kroki-flatten.XXXXXX") || exit 1
-     FLATTEN_TMP="$FLATTEN_DIR/flatten.jpg"
-     if sips -s format jpeg <path>.png --out "$FLATTEN_TMP" >/dev/null &&
-        sips -s format png "$FLATTEN_TMP" --out <path>.png >/dev/null; then
-       rm -f "$FLATTEN_TMP"
-       rmdir "$FLATTEN_DIR"
-     else
-       rm -f "$FLATTEN_TMP"
-       rmdir "$FLATTEN_DIR"
-       exit 1
-     fi
-   else
-     echo "No image flattener available. Install ImageMagick or Python Pillow." >&2
-     exit 1
-   fi
-
-   # Verify — output should say "8-bit/color RGB" (not RGBA).
-   # `file` is absent on bare Windows; fall back to ImageMagick's identify.
-   file <path>.png 2>/dev/null || { command -v identify >/dev/null && identify -format '%[channels]\n' <path>.png; }
+   python3 "<skill-dir>/scripts/render.py" "<path>.mmd" --format png
+   # Choose svg or both only when the requested use calls for it:
+   python3 "<skill-dir>/scripts/render.py" "<path>.mmd" --format both
    ```
 
-   If the check still reports `RGBA` (or `rgba`), the flatten didn't take — retry
-   with a different tool from the list above.
+   The helper reads `KROKI_PORT` (default 8585); `--port` overrides it. Outputs
+   go alongside the source unless `--out-dir` is supplied. It checks HTTP failures,
+   validates output, and stages all requested formats before replacing prior
+   outputs. A failed render must not be delivered as a successful revision.
 
-5. **Visually review the PNG** using the host's available image-viewing tool (for example, Claude Code's `Read` or Codex's `view_image`, when available). A shell command that only reports file metadata does not count as visual review. If image viewing is unavailable, report that visual review could not be completed and do not claim it passed. Otherwise, check the criteria in the next section and either:
+4. **Check the format.** The helper flattens PNG to opaque RGB, preferring
+   lossless conversion, and inserts a white canvas rectangle covering the SVG
+   viewBox. It preserves SVG text and shapes. SVG needs no raster flattener.
+   Do not send SVG through JPEG or PNG conversion for the deliverable. For other
+   Kroki engines, verify the engine's supported formats first; this helper is
+   intentionally Mermaid-only.
+
+5. **Visually review each selected output** using the host's available image-viewing tool (for example, Claude Code's `Read` or Codex's `view_image`, when available). A shell command that only reports file metadata does not count as visual review. For SVG, open the actual SVG in a browser and inspect it or a browser screenshot; reviewing the separately generated PNG does not prove the SVG looks correct. If image viewing is unavailable, report that visual review could not be completed and do not claim it passed. Otherwise, check the criteria in the next section and either:
    - Declare it acceptable, or
    - Edit the `.mmd` source and re-render (+ re-flatten) until it passes.
 
@@ -187,7 +170,7 @@ For each diagram requested:
 
 ## Review criteria (the vision pass)
 
-After opening each PNG with an image-viewing tool, check:
+After opening each selected output (SVG in a browser), check:
 
 | Issue | Symptom | Fix |
 |---|---|---|
@@ -197,10 +180,10 @@ After opening each PNG with an image-viewing tool, check:
 | **Floating notes overlap** | `note right of X` produces a dashed connector that crosses real arrows | Drop redundant notes, or place them at the diagram edges (use `note left of` to push them outward). |
 | **Tiny illegible text** | Diagram is wider than 2000 px and labels look pixelated when scaled down | Shorten participant names, abbreviate. Long technical names like `Background pool (customdomain-teardown)` → `Async pool` + a `Note over` with the long form. |
 | **Font fallback** | Diagram uses default Mermaid font even though the source asked for Open Sans / Inter / etc. | The Kroki Mermaid container doesn't have custom fonts installed. Don't try to fight it — remove the `fontFamily` from `%%{init: …}%%` so the default doesn't generate a "missing font" warning. |
-| **Transparent background** | PNG looks fine in your reader but has alpha — labels become unreadable on dark Confluence / Slack | `?bgColor=white` does not guarantee an RGB output. Must flatten with the OS-appropriate tool in step 4 (ImageMagick / sips / Pillow). Verify with `file <path>.png` → should say `8-bit/color RGB`, not `RGBA`. |
+| **Transparent background** | PNG looks fine in your reader but has alpha — labels become unreadable on dark Confluence / Slack | `?bgColor=white` does not guarantee an RGB output. Use the helper's opaque white output. Verify with `file <path>.png` → should say `8-bit/color RGB`, not `RGBA`. |
 | **Logical errors** | Arrows don't match the actual code/flow, missing async vs sync distinction, etc. | Re-read the source code / docs the diagram represents, fix factual errors. |
 
-If a fix requires re-rendering, **edit the `.mmd` and re-curl** — don't try to surgically patch the PNG.
+If a fix requires re-rendering, **edit the `.mmd` and re-run the renderer** — don't try to surgically patch the PNG.
 
 ## Standard init block
 
@@ -248,7 +231,7 @@ This makes the phase boundary unmissable.
 - **Invalid or large Mermaid sources** can return HTTP 400 — use `curl --fail`, check its exit status, and inspect the renderer response before retrying.
 - **POST body** must be UTF-8 — avoid stray BOMs or CRLF (some editors add them).
 - **Render times** for big sequences can be 3–6 seconds — that's normal; not stuck.
-- **`bgColor`** is supported for Mermaid PNG but NOT for SVG (SVG always has transparent background — set the bg in your stylesheet if needed).
+- **SVG background**: do not rely on the PNG `bgColor` query for vector exports. The helper inserts an explicit white background rectangle.
 - **Check PNG alpha** even with `?bgColor=white`. Renderer output may retain an alpha channel or transparent regions. Always flatten to RGB before delivering (see step 4) — otherwise the diagram is unreadable on dark themes.
 
 ## Final report format
@@ -261,7 +244,7 @@ Generated N diagrams under $BASE/<slug>/:
   01-architecture.png         — <one-line description>
   02-state-machine.png        — <one-line description>
   …
-All have white backgrounds and have been visually reviewed; specific tweaks made: <list>.
+All delivered images have white backgrounds and have been visually reviewed; specific tweaks made: <list>.
 ```
 
 Don't list every byte count, dimension, or HTTP code in the final report — those are debugging output, not deliverables.

@@ -1,0 +1,21 @@
+%%{init: {'theme':'default'}}%%
+sequenceDiagram
+    participant User as Browser
+    participant API as Export API
+    participant Queue as Job queue
+    participant Worker as Export worker
+    rect rgb(232,245,248)
+        Note over User,Queue: Request accepted
+        User->>API: Request report export
+        API->>Queue: Enqueue job
+        Queue-->>API: Job accepted
+        API-->>User: Job ID and pending status
+    end
+    rect rgb(255,247,224)
+        Note over Queue,Worker: Background processing
+        Queue->>Worker: Deliver job
+        Worker->>Worker: Generate and store report
+        Worker->>Worker: Mark job ready in database
+    end
+    User->>API: Check job status
+    API-->>User: Ready and download URL

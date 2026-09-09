@@ -8,3 +8,8 @@
 /*.mmd
 /kroki-diagrams/
 /diagrams/
+
+# Python helper and test caches
+__pycache__/
+*.pyc
+.venv/

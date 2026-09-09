@@ -2,8 +2,7 @@
 
 A shared skill for [Claude Code](https://claude.com/claude-code) and
 [OpenAI Codex](https://developers.openai.com/codex/) that renders Mermaid (and
-other [Kroki](https://kroki.io)-supported) diagrams to **flattened, white-background
-PNGs** suitable for Confluence / Slack / docs, then reviews each render visually
+other [Kroki](https://kroki.io)-supported) diagrams to **white-background PNG or SVG files** suitable for Confluence / Slack / docs, then reviews each render visually
 for readability before declaring it done.
 
 The shared workflow grounds diagrams in source material, keeps complex views
@@ -12,6 +11,14 @@ lossless image flattening and checks render failures before processing output.
 
 The skill drives a **local** Kroki stack: the main `kroki` engine plus its
 `kroki-mermaid` companion, wired together on a shared Docker network.
+
+## Sample gallery
+
+Explore the [architecture, sequence, and state examples](examples/report-export/README.md),
+each with PNG, SVG, and editable Mermaid source. For an interactive format
+comparison, open `examples/report-export/index.html` locally after cloning.
+
+![Example report-export architecture](examples/report-export/01-architecture.png)
 
 ## Architecture
 
@@ -30,6 +37,7 @@ internal `kroki-net` bridge network, by DNS hostname `kroki-mermaid`.
 
 - **Docker** with Compose v2 (Docker Desktop on macOS/Windows, or Docker Engine
   + `docker compose` plugin on Linux)
+- **Python 3** for the bundled Mermaid renderer
 - **`curl`** (preinstalled on macOS/Linux; on Windows use Git Bash, WSL, or the
   bundled `curl.exe`)
 - **An image flattener** for the alpha-strip step — the skill auto-detects, in
@@ -43,13 +51,29 @@ internal `kroki-net` bridge network, by DNS hostname `kroki-mermaid`.
   On Linux/Windows there is no `sips`, so install **ImageMagick** (recommended) or
   Pillow.
 
+### Python setup
+
+The bundled renderer requires **Python 3.9 or newer** and the `curl` executable.
+SVG rendering uses only Python's standard library. For lossless PNG conversion
+without ImageMagick, install Pillow using the optional requirements file:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate       # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+If you already have ImageMagick, no Python packages are required. The macOS
+`sips` fallback also works without packages, but its JPEG intermediate can soften
+text. Run the renderer with the Python environment where you installed Pillow.
+
 ## Install
 
 **Step 1 — start the Kroki stack** (both containers, shared network):
 
 ```bash
-git clone https://github.com/tirthoguha/claude-skill-kroki-diagrams.git
-cd claude-skill-kroki-diagrams
+git clone https://github.com/tirthoguha/agent-skill-kroki-diagrams.git
+cd agent-skill-kroki-diagrams
 docker compose up -d                          # or: KROKI_PORT=9123 docker compose up -d
 curl -sf http://localhost:8585/ >/dev/null && echo "Kroki OK"
 ```
@@ -139,7 +163,7 @@ export KROKI_PORT=9123   # add to ~/.zshrc / ~/.bashrc to persist
 
 ## Configuring the output directory
 
-By default the skill writes `.mmd` sources and rendered `.png`s to
+By default the skill writes `.mmd` sources and rendered PNG/SVG files to
 `~/Documents/kroki-diagrams/<topic-slug>/`. Override the base directory by
 exporting `KROKI_DIAGRAMS_DIR` (the skill reads it via the shell):
 
@@ -163,23 +187,28 @@ topology declaratively so it comes up with one command:
 - `restart: unless-stopped` so the stack survives reboots,
 - the host port is parameterised (`KROKI_PORT`, default `8585`).
 
-## What this repo deliberately does NOT contain
+## Generated diagrams and examples
 
-Rendered diagram outputs (the `.mmd` + `.png` files the skill produces) are
-**work artifacts**, not source — so `.gitignore` keeps them out, and the skill
-writes them outside any repo by default (`KROKI_DIAGRAMS_DIR`, default
-`~/Documents/kroki-diagrams/<topic>/`). They belong in your docs/Confluence, not
-in version control.
+Normal task outputs stay outside the repository by default, under
+`KROKI_DIAGRAMS_DIR` or `~/Documents/kroki-diagrams/<topic>/`. They are not
+committed unless requested. The curated [sample gallery](examples/report-export/)
+is an intentional exception: its Mermaid sources, PNGs, and SVGs demonstrate the
+skill and can be regenerated.
 
 ## How this repo is packaged
 
 ```
-claude-skill-kroki-diagrams/
+agent-skill-kroki-diagrams/
 ├── skills/
 │   └── kroki/
 │       ├── SKILL.md        # shared instructions for both agents
-│       └── agents/
-│           └── openai.yaml # Codex display metadata
+│       ├── agents/
+│       │   └── openai.yaml # Codex display metadata
+│       └── scripts/
+│           └── render.py   # validated Mermaid PNG/SVG output
+├── examples/report-export/ # sample gallery, sources, PNGs and SVGs
+├── tests/                  # local renderer regression tests
+├── requirements.txt        # optional Pillow dependency for lossless PNG
 ├── docker-compose.yml      # the local Kroki stack the skill drives
 ├── LICENSE
 └── README.md
@@ -205,3 +234,30 @@ This repo (the skill, compose stack, and tooling) is MIT-licensed — see
 [LICENSE](LICENSE). `yuzutech/kroki` and `yuzutech/kroki-mermaid` are third-party
 images ([kroki.io](https://kroki.io), also MIT) and are not redistributed here —
 the compose file just pulls them.
+
+## Output choices and rendering
+
+The skill chooses PNG for sharing, SVG for scaling, and both only when needed.
+It keeps editable Mermaid source and reviews SVG separately in a browser.
+The Mermaid helper requires Python 3 and curl; PNG conversion additionally uses
+ImageMagick, Pillow, or the macOS sips fallback.
+
+```bash
+python3 skills/kroki/scripts/render.py /path/to/diagram.mmd --format both
+```
+
+The skill resolves the destination from an explicit user request, then
+`KROKI_DIAGRAMS_DIR`, then `~/Documents/kroki-diagrams/<topic>/`, and writes the
+source there. The standalone helper writes outputs beside that source
+(`--out-dir` overrides this); it does not separately resolve `KROKI_DIAGRAMS_DIR`. The helper
+reads `KROKI_PORT` or accepts `--port`. It validates all requested formats before
+replacing previous outputs, and applies opaque white backgrounds to PNG and SVG.
+
+## Tests
+
+The regression tests use a local HTTP fixture, so Docker is not required. Python
+needs one of the PNG flatteners listed above for the two-format failure test.
+
+```bash
+python3 -m unittest discover -s tests -v
+```
