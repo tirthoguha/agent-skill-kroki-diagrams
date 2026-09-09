@@ -1,0 +1,14 @@
+%%{init: {'theme':'default', 'flowchart': {'htmlLabels': false, 'nodeSpacing': 35, 'rankSpacing': 45}}}%%
+flowchart TB
+    Client[Browser] -->|Request export| API[Export API]
+    API -->|Store status| DB[(Job database)]
+    API -->|Enqueue job| Queue[Job queue]
+    Queue -->|Deliver job| Worker[Export worker]
+    Worker -->|Update status| DB
+    Worker -->|Write report| Store[(Report storage)]
+    classDef edge fill:#e8f5f8,stroke:#5eadc6,color:#164e63
+    classDef service fill:#f3e8f8,stroke:#8b5cf6,color:#3b0764
+    classDef data fill:#fff7e0,stroke:#d4a017,color:#713f12
+    class Client edge
+    class API,Worker,Queue service
+    class DB,Store data

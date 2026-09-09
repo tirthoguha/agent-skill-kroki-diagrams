@@ -1,0 +1,3 @@
+# Optional lossless PNG conversion when ImageMagick is unavailable.
+# SVG rendering uses only Python's standard library and the curl executable.
+Pillow>=10.0
